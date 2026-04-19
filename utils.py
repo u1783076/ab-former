@@ -12,5 +12,8 @@ def NMSE(x, y):
     y = torch.nn.functional.normalize(y, dim=-1)
     return keras.losses.mean_squared_error(x, y)
 
+def cosine_loss(x, y):
+    return keras.losses.cosine_similarity(x, y)
+
 def get_first_item(d):
     return d[next(iter(d.keys()))]

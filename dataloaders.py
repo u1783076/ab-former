@@ -49,7 +49,6 @@ class beeformerDataset(keras.utils.PyDataset):
             self.on_epoch_end()
 
     def __len__(self):
-        # Return number of batches.
         return math.ceil(self.X.shape[0] / (self.batch_size))
 
     def __getitem__(self, n):
@@ -98,6 +97,75 @@ class beeformerDataset(keras.utils.PyDataset):
         if self.shuffle:
             np.random.shuffle(self.indices)
 
+
+class ELSADataset(keras.utils.PyDataset):
+
+    def __init__(
+        self,
+        X: scipy.sparse.csr_matrix,
+        device,
+        batch_size: int = 1024,
+        shuffle: bool = True,
+        workers: int = 1,
+        use_multiprocessing: bool = False,
+        max_queue_size: int = 10,
+        max_output: int | None = None,
+    ):
+        super().__init__(workers=workers, use_multiprocessing=use_multiprocessing, max_queue_size=max_queue_size)
+        self.X = X.tocsr()
+        self.device = device
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.indices = np.arange(self.X.shape[0])
+        self.items_indices = np.arange(self.X.shape[1])
+        self.max_output = self.X.shape[1] if max_output is None else int(max_output)
+        if self.shuffle:
+            self.on_epoch_end()
+
+    def __len__(self):
+        return math.ceil(self.X.shape[0] / self.batch_size)
+
+    def __getitem__(self, n):
+        ind_min = n * self.batch_size
+        ind_max = ind_min + self.batch_size
+        user_slicer = self.indices[ind_min:ind_max]
+        M = self.X[user_slicer]
+
+        pos_items = np.where(M.getnnz(0) > 0)[0]
+        mask = np.ones(self.items_indices.shape, dtype=bool)
+        mask[pos_items] = False
+
+        num_negatives = max(1, self.max_output - len(pos_items))
+        num_negatives = min(num_negatives, int(mask.sum()))
+        neg_items = np.random.choice(self.items_indices[mask], num_negatives, replace=False)
+
+        scipy_coo_x = M[:, pos_items].tocoo()
+        scipy_coo_y = M[:, neg_items].tocoo()
+
+        torch_coo_x = torch.sparse_coo_tensor(
+            np.vstack([scipy_coo_x.row, scipy_coo_x.col]),
+            scipy_coo_x.data.astype(np.float32),
+            scipy_coo_x.shape,
+        )
+        torch_coo_y = torch.sparse_coo_tensor(
+            np.vstack([scipy_coo_y.row, scipy_coo_y.col]),
+            scipy_coo_y.data.astype(np.float32),
+            scipy_coo_y.shape,
+        )
+
+        slicer_pos = torch.from_numpy(np.arange(len(pos_items))).long().to(self.device)
+        slicer_all = torch.from_numpy(np.arange(len(pos_items) + len(neg_items))).long().to(self.device)
+
+        return (torch_coo_x.to(self.device).to_dense(), torch_coo_y.to(self.device).to_dense()), (
+            slicer_pos,
+            slicer_all,
+        )
+
+    def on_epoch_end(self):
+        if self.shuffle:
+            np.random.shuffle(self.indices)
+
+
 class PredictDfRecSysDataset(keras.utils.PyDataset):
     """
     input sparse interaction matrix + item_ids to know order of items
@@ -111,7 +179,6 @@ class PredictDfRecSysDataset(keras.utils.PyDataset):
         self.X = get_sparse_matrix_from_dataframe(df, item_indices=self.items_ids)
 
     def __len__(self):
-        # Return number of batches.
         return math.ceil(self.X.shape[0] / (self.batch_size))
 
     def __getitem__(self, n):
