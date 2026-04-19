@@ -1,147 +1,83 @@
-[![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC_BY--SA_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/) [![DOI](https://img.shields.io/badge/DOI-10.1145/3640457.3691707-blue?style=flat&link=https://doi.org/10.1145/3640457.3691707)](https://doi.org/10.1145/3640457.3691707) [![arXiv](https://img.shields.io/badge/arXiv-2409.10309-b31b1b.svg)](https://arxiv.org/abs/2409.10309)
+# AB-Former: Learning Directed Item Relationships for Content‑Based Recommendation
 
-[![Follow me on HF](https://huggingface.co/datasets/huggingface/badges/resolve/main/follow-me-on-HF-sm-dark.svg)](https://huggingface.co/beeformer)
+This repository extends [beeFormer](https://github.com/recombee/beeformer) – a framework that aligns semantic item representations with interaction data by fine‑tuning sentence Transformers on implicit feedback.
 
+We introduce **AB-Former** (Asymmetric Beeformer), which replaces the symmetric similarity from a single embedding (each item scores others via the same row–column outer product) with an asymmetric setup: separate **Q** and **V** embeddings, and similarity is **QV^T**. That lets **“B given A”** differ from **“A given B”**, decouples an item as a *trigger* from the same item as a *target*, and reduces over‑recommending near‑duplicate items.
 
+### Asymmetry types (`--asym_type`)
 
-# beeFormer
+| Type | Description |
+|------|-------------|
+| `mlp` | After mean pooling, two independent MLPs produce Q and V. |
+| `qformer` | Learned query tokens attend to Transformer hidden states. |
+| `prepend` | Learnable prefix tokens prepended to input text; two forward passes with shared weights. |
+| `dual` | Two complete sentence Transformer copies (initialised identically, then fine‑tuned separately). |
 
-This is the official implementation provided with our paper [beeFormer: Bridging the Gap Between Semantic and Interaction Similarity in Recommender Systems](https://arxiv.org/abs/2409.10309). 
+## Main features
 
-## main idea of beeFormer
+- **Asymmetric beeFormer** – fine‑tune a sentence Transformer with an asymmetric objective (**QV^T**) instead of the symmetric **AA^T** pattern.
+- **Asymmetric L³AE** – hybrid model that first learns a semantic prior matrix **S** from asymmetric embeddings, then solves for the collaborative weight matrix **B** in closed form.
 
-![alt text](https://github.com/recombee/beeformer/blob/main/beeformer_explaining.png?raw=true)
-
-Collaborative filtering (CF) methods can capture patterns from interaction data that are not obvious at first sight. For example, when buying a printer, users can also buy toners, papers, or cables to connect the printer, and collaborative filtering can take such patterns into account. However, in the cold-start recommendation setup, where new items do not have any interaction at all, collaborative filtering methods cannot be used, and recommender systems are forced to use other approaches, like content-based filtering (CBF). The problem with content-based filtering is that it relies on item attributes, such as text descriptions. In our printer example, semantic similarity-trained language models will put other printers closer than accessories that users might be searching for. Our method is training language models to learn these user behavior patterns from interaction data to transfer that knowledge to previously unseen items. Our experiments show that performance benefits from this approach are enormous.
-
-## Steps to start training the models:
-
-1. create virtual environment `python3.10 -m venv beef` and activate it `source beef/bin/activate`
-2. clone this repository and navigate to it `cd beeformer`
-3. install packages `pip install -r requirements.txt`
-4. download the data for movielens: navigate to the `_dataset/ml20m` folder and run `source download_data`
-5. download the data for goodbooks: navigate to the `_dataset/goodbooks` folder and run `source download_data`
-6. download the data for amazonbooks: navigate to the `_dataset/amazonbooks` folder and run `source download_data && python preprocess.py`
-7. in the root folder of the project run the `train.py`, for example like this:
+## Installation
 
 ```bash
-python train.py --seed 42 --scheduler None --lr 1e-5 --epochs 5 --dataset goodbooks --sbert "sentence-transformers/all-mpnet-base-v2" --max_seq_length 384 --batch_size 1024 --max_output 10000 --sbert_batch_size 200 --use_cold_start true --save_every_epoch true --model_name my_model
+python3.10 -m venv abf_env
+source abf_env/bin/activate
+git clone https://github.com/u1783076/ab-former.git
+cd ab-former
+pip install -r requirements.txt
 ```
 
-7. Evaluate the results. To reproduce numbers from the paper using our hugginface repository, run for example: 
+## Data preparation
+
+The repository expects datasets under `_datasets/`. For the original beeFormer datasets:
+
+- **Goodbooks‑10k** – run `source download_data` inside `_datasets/goodbooks`
+- **ML‑20M** – inside `_datasets/ml20m`
+- **Amazon Books** – inside `_datasets/amazbooks`, then `python preprocess.py`
+
+For Amazon Grocery / Beauty, prepare the data similarly.
+
+## Training AB-Former
+
+Basic training with the **MLP** separation strategy:
 
 ```bash
-python evaluate_itemsplit.py --seed 42 --dataset goodbooks --sbert beeformer/Llama-goodbooks-mpnet
+python train.py \
+  --dataset goodbooks \
+  --sbert sentence-transformers/all-mpnet-base-v2 \
+  --max_seq_length 384 \
+  --batch_size 1024 \
+  --lr 1e-5 \
+  --epochs 5 \
+  --use_asym_model true \
+  --asym_type mlp \
+  --model_name my_asym_model
 ```
-or
+
+Other asymmetry types: `mlp`, `qformer`, `prepend`, `dual`. See the paper for hyperparameter recommendations per dataset.
+
+## Training asymmetric L³AE
+
+Train a semantic prior matrix **S** from an asymmetric text encoder, then solve for the collaborative weight matrix **B** in closed form:
+
 ```bash
-python evaluate_timesplit.py --seed 42 --dataset amazon-books --sbert beeformer/Llama-amazbooks-mpnet
+python train.py \
+  --use_l3ae_model true \
+  --use_asym_model true \
+  --asym_type mlp \
+  --dataset goodbooks \
+  --sbert /path/to/checkpoint \
+  --model_name my_l3ae_model
 ```
 
-## Datasets and preprocessing
+If `--use_asym_model false`, L³AE uses a symmetric encoder (one embedding space, same **AA^T**-style similarity as in the original setup).
 
-### Preprocessing information
+## Evaluation
 
-We consider ratings of 4.0 and higher as an interaction. We only keep the users with at least 5 interactions.
+After training, evaluate on the item‑split or time‑split setting:
 
-### LLM Data augmentations
-
-Since there are no text descriptions in the original data, we manually connect several datasets with the original data and train our models on it. However, this approach has several limitations: texts from different sources have different styles and different lengths, and this might influence the results. Therefore, we use the Llama-3.1-8b-instruct model to generate item descriptions for us. We use the following conversation template:
-
-```python
-import pandas as pd
-
-from tqdm import tqdm
-from vllm import LLM, SamplingParams
-
-items = pd.read_feather("items_with_gathered_side_info.feather")
-
-llm = LLM(model="meta-llama/Meta-Llama-3.1-8B-Instruct",dtype="float16")
-
-tokenizer = llm.get_tokenizer()
-conversation = [ tokenizer.apply_chat_template(
-        [
-            {'role': 'system','content':"You are ecomerce shop designer. Given a item description create one paragraph long summarization of the product."},
-            {'role': 'user', 'content': "Item description: "+x},
-            {'role': 'assistant', 'content': "Sure, here is your one paragraph summary of your product:"},
-        ],
-        tokenize=False,
-    ) for x in tqdm(items.gathered_features.to_list())]
-
-output = llm.generate(
-    conversation,
-    SamplingParams(
-        temperature=0.1,
-        top_p=0.9,
-        max_tokens=512,
-        stop_token_ids=[tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],  
-    )
-)
-
-items_descriptions = [o.outputs[0].text for o in output]
-```
-
-However, LLM refused to generate descriptions for some items (For example, because it refuses to generate explicit content). We removed such items from the dataset. We also removed items for which we were not able to connect meaningful descriptions from other datasets, which led to LLM completely hallucinating item descriptions.
-
-We share the resulting LLM-generated item descriptions in `datasets/ml20m`, `dataset/goodbooks` and `datasets/amazonbooks` folders.
-
-### Statistics of datasets used for evaluation 
-
-|                        | GoodBooks-10k | MovieLens-20M | Amazon Books |
-|------------------------|---------------|---------------|--------------|
-| # of items in X        | 9975          | 16902         | 63305        |
-| # of users in X        | 53365         | 136589        | 634964       |
-| # of interactions in X | 4119623       | 9694668       | 8290500      |
-| density of X [%]       | 0.7739        | 0.4199        | 0.0206       |
-| density of X^TX [%]    | 41.22         | 26.93         | 7.59         |
-
-## Pretrained models
-
-We share pretrained models at https://huggingface.co/beeformer.
-
-## Hyperparameters
-
-We used hyperparameters for training our models as follows.
-
-| hyperparameter   | description                                                                                                          | [beeformer/Llama-goodbooks-mpnet](https://huggingface.co/beeformer/Llama-goodbooks-mpnet)                   | [beeformer/Llama-movielens-mpnet](https://huggingface.co/beeformer/Llama-movielens-mpnet)                     | [beeformer/Llama-goodlens-mpnet](https://huggingface.co/beeformer/Llama-goodlens-mpnet)                      | [beeformer/Llama-amazbooks-mpnet](https://huggingface.co/beeformer/Llama-amazbooks-mpnet)                     |
-|------------------|----------------------------------------------------------------------------------------------------------------------|-----------------------------------------|-----------------------------------------|-----------------------------------------|-----------------------------------------|
-| seed             | random seed used during training                                                                                     | 42                                      | 42                                      | 42                                      | 42                                      |
-| scheduler        | learning rate scheduling strategy                                                                                    | constant learning rate                  | constant learning rate                  | constant learning rate                  | constant learning rate                  |
-| lr               | learning rate                                                                                                        | 1e-5                                    | 1e-5                                    | 1e-5                                    | 1e-5                                    |
-| epochs           | number of trained epochs                                                                                             | 5                                       | 5                                       | 10                                      | 5                                       |
-| devices          | training script allow to train on multiple gpus in parallel - we used 4xV100                                         | [0,1,2,3]                               | [0,1,2,3]                               | [0,1,2,3]                               | [0,1,2,3]                               |
-| dataset          | dataset used for training                                                                                            | goodbooks                               | ml20m                                   | goodlens                                | amazon-books                            |
-| sbert            | original sentence transformer model used as an initial model for training                                            | sentence-transformers/all-mpnet-base-v2 | sentence-transformers/all-mpnet-base-v2 | sentence-transformers/all-mpnet-base-v2 | sentence-transformers/all-mpnet-base-v2 |
-| max_seq_length   | limitation of sequence length; shorter sequences trains faster original mpnet model uses max 512 tokens in. sequence | 384                                     | 384                                     | 384                                     | 384                                     |
-| batch_size       | number of users sampled in random batch from interaction matrix                                                      | 1024                                    | 1024                                    | 1024                                    | 1024                                    |
-| max_output       | negative sampling hyperparameter (_m_ in the paper). Negatives are sampled uniformly at random.                      | 10000                                   | 10000                                   | 10000                                   | 12500                                   |
-| sbert_batch_size | number of items processed together during training step (gradient accumulation step size)                            | 200                                     | 200                                     | 200                                     | 200                                     |
-| use_cold_start   | split the dataset item-wise (some items are hidden to test the generalization towards new items)                     | true                                    | true                                    | true                                    | false                                   |
-| use_time_split   | sort interactions by timestamp and use last 20% of interactions as a test set (generalization from the past to the future) | false                             | false                                   | false                                   | true                                    |             
-
-## RecSys 2024 poster
-
-[<img alt="RecSys poster" width="400px" src="beeFormer-poster.png">](beeFormer-poster.pdf)
-
-## Citation
-
-If you find this repository helpful, feel free to cite our paper:
-
-```bibtex
-@inproceedings{10.1145/3640457.3691707,
-        author = {Van\v{c}ura, Vojt\v{e}ch and Kord\'{\i}k, Pavel and Straka, Milan},
-        title = {beeFormer: Bridging the Gap Between Semantic and Interaction Similarity in Recommender Systems},
-        year = {2024},
-        isbn = {9798400705052},
-        publisher = {Association for Computing Machinery},
-        address = {New York, NY, USA},
-        url = {https://doi.org/10.1145/3640457.3691707},
-        doi = {10.1145/3640457.3691707},
-        booktitle = {Proceedings of the 18th ACM Conference on Recommender Systems},
-        pages = {1102–1107},
-        numpages = {6},
-        keywords = {Cold-start recommendation, Recommender systems, Sentence embeddings, Text mining, Zero-shot recommendation},
-        location = {Bari, Italy},
-        series = {RecSys '24}
-}
+```bash
+python evaluate_itemsplit.py --model_path my_asym_model --dataset goodbooks
+python evaluate_timesplit.py --model_path my_asym_model --dataset amazbooks
 ```

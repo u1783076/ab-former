@@ -6,6 +6,7 @@ import argparse
 import subprocess
 
 from time import time
+from callbacks import _build_eval_model
 
 parser = argparse.ArgumentParser()
 
@@ -21,6 +22,7 @@ parser.add_argument("--sbert", default="none", type=str, help="Input sentence tr
 parser.add_argument("--max_seq_length", default=0, type=int, help="Maximum sequece length for sbert")
 parser.add_argument("--prefix", default=None, type=str, help="Add prefix to every item description")
 parser.add_argument("--image_model", default="none", type=str, help="Input image model to test")
+parser.add_argument("--is_asym", default="false", type=str)
 
 args = parser.parse_args([] if "__file__" not in globals() else None)
 print(args)
@@ -85,14 +87,18 @@ def main(args):
             sbert.max_seq_length = args.max_seq_length
 
         print("Encoding item descriptions...")
-
+        texts = dataset.texts
         if args.prefix is not None:
             print("adding prefix", args.prefix, "to all texts")
-            texts = [args.prefix + x for x in dataset.texts]
+            texts = [args.prefix + x for x in texts]
             print(texts[:10])
-            embs = sbert.encode(texts, show_progress_bar=True)
+            model = _build_eval_model(
+                sbert, args.is_asym == "true", texts, dataset.all_interactions.item_id.cat.categories, DEVICE
+            )
         else:
-            embs = sbert.encode(dataset.texts, show_progress_bar=True)
+            model = _build_eval_model(
+                sbert, args.is_asym == "true", dataset.texts, dataset.all_interactions.item_id.cat.categories, DEVICE
+            )
     elif args.image_model!="none":
         image_model = images.ImageModel(args.image_model, device=DEVICE)
 
@@ -100,18 +106,19 @@ def main(args):
         tokenized_test_images = images.read_images_from_dict(dataset.all_interactions.item_id.cat.categories, tokenized_images_dict)
 
         embs = image_model.encode(tokenized_test_images)
+        model = SparseKerasELSA(
+            len(dataset.all_interactions.item_id.cat.categories),
+            embs.shape[1],
+            dataset.all_interactions.item_id.cat.categories,
+            device=DEVICE,
+        )
+        model.to(DEVICE)
+        model.set_weights([embs])
+
 
     else:
         print("Model not specified.")
-
-    model = SparseKerasELSA(
-        len(dataset.all_interactions.item_id.cat.categories),
-        embs.shape[1],
-        dataset.all_interactions.item_id.cat.categories,
-        device=DEVICE,
-    )
-    model.to(DEVICE)
-    model.set_weights([embs])
+        return
 
     print("Calculating predictions...")
 

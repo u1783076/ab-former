@@ -647,13 +647,11 @@ class Evaluation:
             item_indices=self.test_target.item_id.cat.categories,
             user_indices=self.test_target.user_id.cat.categories,
         )
-        # print(preds)
         trues = get_sparse_matrix_from_dataframe(
             self.test_target,
             item_indices=self.test_target.item_id.cat.categories,
             user_indices=self.test_target.user_id.cat.categories,
         )
-        # print(trues)
         if save_dir is not None:
             scipy.sparse.save_npz(save_dir + "/preds.npz", preds)
             scipy.sparse.save_npz(save_dir + "/trues.npz", trues)
@@ -661,7 +659,10 @@ class Evaluation:
         results = {}
         for name, metric in self.metrics.items():
             metric.calculate(trues, preds)
-            results[name] = metric.value
+            user_metrics = metric.results["score"].values
+            se = user_metrics.std(ddof=1) / np.sqrt(len(user_metrics))
+            ci = 1.96 * se
+            results[name] = (metric.value, ci)
         return results
 
     def __repr__(self):
@@ -813,7 +814,8 @@ class ColdStartEvaluation(Evaluation):
 # time based evaluator
 class TimeBasedEvaluation(Evaluation):
     def __init__(
-        self, dataset, what="test", test_split_size=None, metrics=["recall@20", "recall@50", "ndcg@100", "coverage@20"]
+        self, dataset, what="test", test_split_size=None,
+        metrics=["recall@10", "recall@20", "ndcg@50"]
     ):
         self.dataset = dataset
         self.metrics = {}
